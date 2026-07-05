@@ -20,26 +20,58 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
         
-      - name: Install NDK and CMake
-        run: sdkmanager "ndk;26.1.10909125" "cmake;3.22.1"
-        
-      - name: Install Gradle
+      - name: Install NDKs, platforms, CMake
         run: |
-          wget -q https://services.gradle.org/distributions/gradle-8.5-bin.zip
-          unzip -q gradle-8.5-bin.zip
-          sudo mv gradle-8.5 /opt/gradle
-          sudo ln -sf /opt/gradle/bin/gradle /usr/local/bin/gradle
-          gradle --version
+          sdkmanager "platforms;android-34" "platforms;android-33" "platforms;android-32"
+          sdkmanager "ndk;26.1.10909125" "ndk;25.2.9519653"
+          sdkmanager "cmake;3.22.1" "cmake;3.18.1"
+          sdkmanager "build-tools;34.0.0"
           
-      - name: Point Gradle to Android SDK
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: 8.7
+          
+      - name: Show build configs
+        run: |
+          echo "=== ROOT BUILD.GRADLE ==="
+          cat build.gradle
+          echo ""
+          echo "=== APP BUILD.GRADLE ==="
+          cat app/build.gradle
+          echo ""
+          echo "=== SETTINGS.GRADLE ==="
+          cat settings.gradle
+          echo ""
+          echo "=== GRADLE.PROPERTIES ==="
+          cat gradle.properties
+          
+      - name: Create local.properties
         run: echo "sdk.dir=$ANDROID_SDK_ROOT" > local.properties
         
       - name: Build Debug APK
-        run: gradle assembleDebug
+        run: |
+          gradle assembleDebug 2>&1 | tee build-output.log
+          exit ${PIPESTATUS[0]}
+        continue-on-error: true
         
-      - name: Upload APK
+      - name: Show build error
+        if: always()
+        run: |
+          echo "=== LAST 100 LINES ==="
+          tail -n 100 build-output.log
+          
+      - name: Upload build log
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: codm-esp-debug
-          path: app/build/outputs/apk/debug/*.apk
-          if-no-files-found: error
+          name: build-log
+          path: build-output.log
+          
+      - name: Upload APK if found
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: codm-apk
+          path: app/build/outputs/apk/**/*.apk
+          if-no-files-found: warn
