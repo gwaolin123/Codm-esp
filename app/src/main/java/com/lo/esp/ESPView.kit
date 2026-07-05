@@ -1,0 +1,155 @@
+package com.lo.esp
+
+import android.content.Context
+import android.graphics.*
+import android.view.View
+import kotlinx.coroutines.*
+import kotlin.math.pow
+import kotlin.math.sqrt
+
+class ESPView(context: Context) : View(context) {
+    private val boxPaint = Paint().apply {
+        isAntiAlias = true
+        style = Paint.Style.STROKE
+        strokeWidth = 2.5f
+    }
+
+    private val fillPaint = Paint().apply {
+        style = Paint.Style.FILL
+    }
+
+    private val textPaint = Paint().apply {
+        color = Color.WHITE
+        textSize = 26f
+        isFakeBoldText = true
+        setShadowLayer(4f, 0f, 0f, Color.BLACK)
+    }
+
+    private val hpBgPaint = Paint().apply {
+        color = Color.DKGRAY
+        style = Paint.Style.FILL
+    }
+
+    private val hpFillPaint = Paint().apply {
+        style = Paint.Style.FILL
+    }
+
+    private val scope = CoroutineScope(Dispatchers.Default + Job())
+    private var entities = listOf<Entity>()
+    private var screenW = 0
+    private var screenH = 0
+
+    data class Entity(
+        val screenX: Float,
+        val screenY: Float,
+        val hp: Int,
+        val team: Int,
+        val distance: Float,
+        val height: Float
+    )
+
+    fun startRenderLoop() {
+        scope.launch {
+            while (isActive) {
+                updateEntityData()
+                withContext(Dispatchers.Main) { invalidate() }
+                delay(16)
+            }
+        }
+    }
+
+    private fun updateEntityData() {
+        val maxEntities = 64
+        val positions = FloatArray(maxEntities * 3)
+        val health = IntArray(maxEntities)
+        val teams = IntArray(maxEntities)
+
+        NativeBridge.getEntityData(positions, health, teams, maxEntities)
+        val localTeam = NativeBridge.getLocalTeam()
+        val localPos = NativeBridge.getLocalPosition()
+
+        val newEntities = mutableListOf<Entity>()
+
+        for (i in 0 until maxEntities) {
+            if (health[i] <= 0 || health[i] > 200) continue
+            if (teams[i] == localTeam) continue
+
+            val screenPos = FloatArray(2)
+            if (NativeBridge.worldToScreen(
+                positions[i * 3],
+                positions[i * 3 + 1],
+                positions[i * 3 + 2],
+                screenPos,
+                screenW,
+                screenH
+            )) {
+                val dist = calculateDistance(
+                    positions[i * 3], positions[i * 3 + 1], positions[i * 3 + 2],
+                    localPos[0], localPos[1], localPos[2]
+                )
+
+                // Estimate player height for box sizing
+                val boxH = 120f * (300f / dist.coerceAtLeast(10f))
+                val boxW = boxH * 0.4f
+
+                newEntities.add(Entity(
+                    screenPos[0], screenPos[1],
+                    health[i], teams[i], dist, boxH
+                ))
+            }
+        }
+        entities = newEntities
+    }
+
+    override fun onDraw(canvas: Canvas) {
+        super.onDraw(canvas)
+        screenW = width
+        screenH = height
+
+        entities.forEach { entity ->
+            val color = when {
+                entity.hp > 100 -> Color.argb(255, 255, 50, 50)
+                entity.hp > 50 -> Color.argb(255, 255, 200, 50)
+                else -> Color.argb(255, 50, 255, 100)
+            }
+
+            boxPaint.color = color
+            val boxW = entity.height * 0.4f
+            val boxH = entity.height
+            val left = entity.screenX - boxW / 2
+            val top = entity.screenY - boxH / 2
+
+            // Box ESP
+            canvas.drawRect(left, top, left + boxW, top + boxH, boxPaint)
+
+            // Health bar
+            val barW = boxW + 4
+            val barH = 5f
+            val barX = left - 2
+            val barY = top - barH - 4
+            val hpPercent = entity.hp / 100f
+
+            canvas.drawRect(barX, barY, barX + barW, barY + barH, hpBgPaint)
+            hpFillPaint.color = when {
+                entity.hp > 80 -> Color.GREEN
+                entity.hp > 40 -> Color.YELLOW
+                else -> Color.RED
+            }
+            canvas.drawRect(barX, barY, barX + barW * hpPercent, barY + barH, hpFillPaint)
+
+            // Info text
+            val info = "${entity.hp}HP | ${entity.distance.toInt()}m"
+            canvas.drawText(info, left, top + boxH + 28, textPaint)
+        }
+    }
+
+    private fun calculateDistance(x1: Float, y1: Float, z1: Float,
+                                  x2: Float, y2: Float, z2: Float): Float {
+        return sqrt((x1 - x2).pow(2) + (y1 - y2).pow(2) + (z1 - z2).pow(2))
+    }
+
+    override fun onDetachedFromWindow() {
+        super.onDetachedFromWindow()
+        scope.cancel()
+    }
+}
